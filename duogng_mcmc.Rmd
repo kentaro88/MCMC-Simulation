@@ -1,0 +1,811 @@
+---
+title: "Homework 2"
+author: "Kentaro Kato (1851049)"
+date: "25 June 2019"
+---
+***
+
+# Part 1
+
+### 1a)  Illustrate the characteristics of the statistical model for dealing with the *Dugong*'s data. Lengths $Y_i$ and ages $x_i$ of  27 dugongs captured off the coast of Queensland have been recorded and the following (non linear)  regression model is considered in
+\begin{eqnarray*}
+Y_i &\sim& N(\mu_i, \tau^2) \\
+\mu_i=f(x_i)&=& \alpha - \beta \gamma^{x_i}\\
+\end{eqnarray*}
+### Model parameters are $\alpha \in (1, \infty)$, $\beta \in (1, \infty)$, $\gamma \in (0,1)$, $\tau^2 \in (0,\infty)$. 
+### Let us consider the following prior distributions:
+\begin{eqnarray*}
+\alpha &\sim&  N(0,\sigma^2_{\alpha})\\
+\beta  &\sim&  N(0,\sigma^2_{\beta}) \\
+\gamma &\sim&  Unif(0,1)\\
+\tau^2 &\sim&  IG(a,b)) (Inverse Gamma)
+\end{eqnarray*}
+
+##### import libraries which are going to be used
+```{r import_libraries}
+library(invgamma)
+library(coda)
+library(batchmeans)
+library(corrplot)
+```
+
+```{r import_data}
+# import the data
+my_data <- read.table("../dugong/dugong-data.tsv",sep = "\t", header = TRUE)
+# remove the first column
+my_data <- my_data[2:3] 
+x <- my_data$Age
+Y <- my_data$Length
+
+# Age
+x = c( 1.0, 1.5, 1.5, 1.5, 2.5, 4.0, 5.0, 5.0, 7.0, 8.0, 8.5,
+       9.0, 9.5, 9.5, 10.0, 12.0, 12.0, 13.0, 13.0, 14.5, 15.5, 
+       15.5, 16.5, 17.0, 22.5, 29.0, 31.5)
+
+# Length
+Y = c(1.80, 1.85, 1.87, 1.77, 2.02, 2.27, 2.15, 2.26, 2.47, 2.19, 
+      2.26, 2.40, 2.39, 2.41, 2.50, 2.32, 2.32, 2.43, 2.47, 2.56, 
+      2.65, 2.47, 2.64, 2.56, 2.70, 2.72, 2.57)
+
+# n is the number of observations
+n <- length(x)
+
+plot(x = x, y = Y, xlab = "Age", ylab = "Length")
+```
+
+
+### 1b)  Derive the corresponding likelihood function
+$$L(\mu_i, \tau^2) = \prod^n_{i = 1}f(Y_i | \mu_i, \tau^2) = \prod^n_{i = 1} \frac{1}{\sqrt{2\pi\tau^2}} exp(-\frac{1}{2\tau^2}(Y_i-\mu_i)^2)$$
+
+$$\prod^n_{i = 1}f(Y_i | x_i, \alpha, \beta, \gamma, \tau^2) = \prod^n_{i = 1} \frac{1}{\sqrt{2\pi\tau^2}} exp(-\frac{1}{2\tau^2}(Y_i-(\alpha-\beta\gamma^{x_i}))^2)$$
+
+$$= (\frac{1}{\sqrt{2\pi}})^n\frac{1}{\tau^n}exp(-\frac{1}{2\tau^2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2)$$
+
+### 1c)  Write down the expression of the joint prior distribution of the parameters at stake and illustrate your suitable choice for the hyperparameters.
+
+$$\pi(\alpha, \beta, \gamma, \tau^2|\sigma^2_\alpha, \sigma^2_\beta, a, b)$$
+$$= \frac{1}{\sqrt{2\pi\sigma^2_\alpha}}exp(-\frac{\alpha^2}{2\sigma^2_\alpha})
+\cdot\frac{1}{\sqrt{2\pi\sigma^2_\beta}}exp(-\frac{\beta^2}{2\sigma^2_\beta})
+\cdot\frac{b^a}{\Gamma(a)}(\frac{1}{\tau^2})^{a-1}exp(\frac{-b}{\tau^2})$$
+
+Now, I choose the hyperparameters below.
+$$\sigma^2_\alpha = 10000, \ \sigma^2_\beta = 10000, \ a = 0.001, \ b = 0.001$$
+
+```{r set_initial_hyperparameters}
+# hyperparameters 
+sigma_a <- 1e+04
+sigma_b <- 1e+04
+a <- 0.001
+b <- 0.001
+```
+
+### 1d)  Derive the functional form  (up to proportionality constants) of all *full-conditionals*
+
+##### Joint posterior distribution
+$$\pi(\alpha,\beta,\gamma,\tau^2|Y_i, \sigma^2_\alpha, \sigma^2_\beta, a, b)$$
+$$=\pi(\alpha, \beta, \gamma, \tau^2|\sigma^2_\alpha, \sigma^2_\beta, a, b)L(\alpha, \beta, \gamma, \tau^2)$$
+
+$$= \prod^n_{i = 1} \frac{1}{\sqrt{2\pi\tau^2}} exp(-\frac{1}{2\tau^2}(y_i-(\alpha-\beta\gamma^{x_i}))^2)$$
+$$\cdot\frac{1}{\sqrt{2\pi\sigma^2_\alpha}}exp(-\frac{\alpha^2}{2\sigma^2_\alpha})$$
+$$\cdot\frac{1}{\sqrt{2\pi\sigma^2_\beta}}exp(-\frac{\beta^2}{2\sigma^2_\beta})$$
+$$\cdot\frac{b^a}{\Gamma(a)}(\frac{1}{\tau^2})^{a+1}exp(\frac{-b}{\tau^2})$$
+
+$$=(constant) \cdot \frac{1}{\tau^n} \cdot exp(-\frac{1}{2\tau^2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2)
+\cdot exp(-\frac{\alpha^2}{2\sigma^2_\alpha})
+\cdot exp(-\frac{\beta^2}{2\sigma^2_\beta})
+\cdot (\frac{1}{\tau^2})^{a+1} \cdot exp(\frac{-b}{\tau^2})$$
+
+##### considering $\pi(\alpha, \beta, \gamma, \tau^2|Y) \propto \pi(Y, \alpha, \beta, \gamma, \tau^2)$
+
+##### full conditional for $\alpha$
+
+$$\pi(\alpha|-) \propto \pi(Y, \alpha, \beta, \gamma, \tau^2)$$
+
+$$\propto exp(-\frac{1}{2\tau^2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2) \cdot exp(-\frac{\alpha^2}{2\sigma^2_\alpha})$$
+
+$$= exp(-\frac{1}{2\tau^2}\sum(Y_i^2-2Y_i\alpha+2Y_i\beta\gamma^{x_i}+\alpha^2-2\alpha\beta\gamma^{x_i}+\beta^2\gamma^{x_i+2}))
+\cdot 
+exp(-\frac{\alpha^2}{2\sigma^2_\alpha})$$
+
+
+$$\propto exp(-\frac{1}{2\tau^2} \sum(\alpha^2-2\alpha(Y_i+\beta\gamma^{x_i}))
+\cdot exp(-\frac{\alpha^2}{2\sigma^2_\alpha})$$
+
+$$= exp(-\frac{1}{2\tau^2} \sum\alpha^2+\frac{1}{\tau^2}\alpha\sum(Y_i+\beta\gamma^{x_i})
+-\frac{\alpha^2}{2\sigma^2_\alpha})$$
+
+$$= exp(-\frac{1}{2}(\frac{n}{\tau^2}+\frac{1}{\sigma^2_\alpha})\alpha^2
++\frac{1}{\tau^2}\sum(Y_i+\beta\gamma^{x_i})\alpha)$$
+
+$$= exp\Bigg(-\frac{1}{2}\Big((\frac{n}{\tau^2}+\frac{1}{\sigma^2_\alpha})\alpha^2
+-\frac{2}{\tau^2}\sum(Y_i+\beta\gamma^{x_i})\alpha\Big)\Bigg)$$
+
+$$= exp\Bigg(-\frac{1}{2}\Big(\frac{n\sigma^2_\alpha + \tau^2}{\tau^2\sigma^2_\alpha}\alpha^2 
+- \frac{2(\sum Y_i + \sum\beta\gamma^{x_i})}{\tau^2}\alpha\Big)\Bigg)$$
+
+
+##### full conditional for $\beta$
+
+$$\pi(\beta|-) \propto \pi(Y, \alpha, \beta, \gamma, \tau^2)$$
+
+$$\propto exp(-\frac{1}{2\tau^2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2) 
+\cdot 
+exp(-\frac{\beta^2}{2\sigma^2_\beta})$$
+
+$$= exp(-\frac{1}{2\tau^2}\sum(Y_i^2-2Y_i(\alpha-\beta\gamma^{x_i})+(\alpha-\beta\gamma^{x_i})^2))
+\cdot 
+exp(-\frac{\beta^2}{2\sigma^2_\beta})$$
+
+$$= exp(-\frac{1}{2\tau^2}\sum(Y_i^2-2Y_i\alpha+2Y_i\beta\gamma^{x_i}+\alpha^2-2\alpha\beta\gamma^{x_i}+\beta^2\gamma^{2x_i}))
+\cdot 
+exp(-\frac{\beta^2}{2\sigma^2_\beta})$$
+
+$$\propto exp(-\frac{1}{2\tau^2} \sum(\beta^2\gamma^{2x_i}+2\gamma^{x_i}(Y_i-\alpha)\beta))
+\cdot
+exp(-\frac{\beta^2}{2\sigma^2_\beta})$$
+
+$$= exp(-\frac{1}{2\tau^2} (\beta^2\sum\gamma^{2x_i}+\beta\sum2\gamma^{x_i}(Y_i-\alpha)))
+\cdot
+exp(-\frac{\beta^2}{2\sigma^2_\beta})$$
+
+$$= exp(-\frac{1}{2\tau^2} \beta^2\sum\gamma^{2x_i}-\frac{1}{2\tau^2}\beta\sum2\gamma^{x_i}(Y_i-\alpha)
+-\frac{\beta^2}{2\sigma^2_\beta})$$
+
+$$= exp\Big(-\frac{1}{2}(\frac{\sum\gamma^{2x_i}}{\tau^2}+\frac{1}{\sigma^2_\beta})\beta^2
+-\frac{1}{\tau^2}\beta\sum\gamma^{x_i}(Y_i-\alpha)\Big)$$
+
+$$= exp\Bigg(-\frac{1}{2}\Big((\frac{\sum\gamma^{2x_i}}{\tau^2}+\frac{1}{\sigma^2_\beta})\beta^2
+-\big(-\frac{2}{\tau^2}\sum\gamma^{x_i}(Y_i-\alpha)\big)\beta\Big)\Bigg)$$
+
+$$= exp\Bigg(-\frac{1}{2}\Big(\frac{\sigma^2_\beta\sum\gamma^{2x_i}+\tau^2}{\tau^2\sigma^2_\beta}\beta^2
+-\big(-\frac{2\sum\gamma^{x_i}(Y_i-\alpha)}{\tau^2}\big)\beta\Big)\Bigg)$$
+
+
+##### full conditional for $\gamma$
+
+$$\pi(\gamma|-) \propto \pi(Y, \alpha, \beta, \gamma, \tau^2)$$
+
+$$\propto exp(-\frac{1}{2\tau^2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2)$$
+
+##### full conditional for $\tau^2$
+
+$$\pi(\tau^2|-) \propto \pi(Y, \alpha, \beta, \gamma, \tau^2)$$
+
+$$\propto \frac{1}{\tau^n} \cdot exp(-\frac{1}{2\tau^2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2)
+\cdot
+(\frac{1}{\tau^2})^{a+1} \cdot exp(\frac{-b}{\tau^2})$$
+
+$$ = (\frac{1}{\tau^2})^{\frac{n}{2}+a+1}exp(-\frac{1}{2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2-\frac{b}{\tau^2})$$
+
+$$ = (\frac{1}{\tau^2})^{\frac{n}{2}+a+1}exp(-(\frac{1}{2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2+b)\frac{1}{\tau^2})$$
+
+
+### 1e)  Which distribution can you recognize within standard parametric families so that direct simulation from full conditional can be easily implemented ?
+
+##### full conditional distribution for $\alpha$ is 
+\begin{eqnarray*}
+\alpha &\sim& N\Bigg(
+\frac{\sigma^2_\alpha(\sum Y_i + \sum\beta\gamma^{x_i})}{n\sigma^2_\alpha + \tau^2}, 
+\frac{\tau^2\sigma^2_\alpha}{n\sigma^2_\alpha + \tau^2}
+\Bigg)
+\end{eqnarray*}
+
+##### full conditional distribution for $\beta$ is 
+\begin{eqnarray*}
+\beta &\sim& N\Bigg(
+-\frac{\sigma^2_\beta\sum\gamma^{x_i}(Y_i-\alpha)}{\sigma^2_\beta\sum\gamma^{2x_i}+\tau^2}, 
+\frac{\tau^2\sigma^2_\beta}{\sigma^2_\beta\sum\gamma^{2x_i}+\tau^2}
+\Bigg)
+\end{eqnarray*}
+
+##### full conditional distribution for $\tau^2$ is 
+\begin{eqnarray*}
+\tau^2 &\sim& IG\bigg(
+\frac{n}{2}+a, 
+\frac{1}{2}\sum(Y_i-(\alpha-\beta\gamma^{x_i}))^2+b
+\bigg)
+\end{eqnarray*}
+
+
+### 1f)  Using a suitable Metropolis-within-Gibbs algorithm simulate a Markov chain ($T=10000$) to approximate the posterior distribution for the above model
+
+```{r make_funcitons}
+# Metropolis Algorithm
+MH <- function(new_para, curr_para, new_prob, curr_prob){
+  if(curr_prob == 0){
+    return(new_para)
+  }
+  ratio <- new_prob/curr_prob
+  if (ratio > 1) {
+    ratio = 1
+  }
+  output <- sample(c(new_para, curr_para), size = 1, prob = c(ratio, 1-ratio))
+  return(output)
+}
+
+# Full conditional for alpha
+full_alpha <- function(beta, gamma, tau_2){
+  # Gibbs sampling
+  para1 <- sigma_a * sum(Y+beta*gamma^x) / (n*sigma_a+tau_2)
+  para2 <- (tau_2*sigma_a) / (n*sigma_a + tau_2)
+  new_alpha = 0
+  while(new_alpha < 1){
+    new_alpha <- rnorm(n = 1, mean = para1, sd = sqrt(para2))
+  }
+  return(new_alpha)
+}
+
+# Full conditional for beta
+full_beta <- function(alpha, gamma, tau_2){
+  # Gibbs sampling
+  para1 <-  -(sigma_b*sum(gamma^x*(Y-alpha))) / (sigma_b*sum(gamma^(x*2)) + tau_2)
+  para2 <-  (tau_2*sigma_b) /  (sigma_b*sum(gamma^(x*2)) + tau_2 )
+  new_beta = 0
+  while(new_beta < 1){
+    new_beta <- rnorm(n = 1, mean = para1, sd = sqrt(para2))
+  }
+  return(new_beta)
+}
+
+# Full conditional for gamma
+full_gamma <- function(curr_gamma, alpha, beta, tau_2){
+  # sampling
+  new_gamma <- runif(1)
+  # MH
+  new_prob <- exp( -1/(2*tau_2) * sum((beta*new_gamma^x + Y - alpha)^2) )
+  curr_prob <- exp( -1/(2*tau_2) * sum((beta*curr_gamma^x + Y - alpha)^2) )
+  new_gamma <- MH(new_gamma, curr_gamma, new_prob, curr_prob)
+  
+  return(new_gamma)
+}
+
+# Full conditional for tau^2
+full_tau_2 <- function(alpha, beta, gamma){
+  
+  # Gibbs sampling
+  para1 <- n/2 + a
+  para2 <- sum((Y-alpha+beta*gamma^x)^2)/2 + b
+  new_tau_2 <- rinvgamma(n = 1, para1, para2)
+
+  return(new_tau_2)
+}
+```
+
+
+```{r Simulation}
+set.seed(1234)
+
+# SIMULATION
+num_sim <- 10000
+
+# parameters
+data_alpha  <- numeric(num_sim)
+data_beta   <- numeric(num_sim)
+data_gamma  <- numeric(num_sim)
+data_tau_2  <- numeric(num_sim)
+
+curr_alpha  <- 2
+curr_beta  <- 1
+curr_gamma  <- 0.5
+curr_tau_2  <- 1
+
+Metropolis_Gibbs <- function(curr_alpha, curr_beta, curr_gamma, curr_tau_2, num_sim){
+  for (i in 1:num_sim){
+  
+  # Metropolis-within-Gibbs
+  curr_alpha <- full_alpha(beta = curr_beta, 
+                           gamma = curr_gamma, 
+                           tau_2 = curr_tau_2)
+  
+  curr_beta <- full_beta(alpha = curr_alpha, 
+                         gamma = curr_gamma,
+                         tau_2 = curr_tau_2)
+  
+  curr_gamma <- full_gamma(curr_gamma, 
+                           alpha = curr_alpha,
+                           beta = curr_beta, 
+                           tau_2 = curr_tau_2)
+
+  curr_tau_2 <- full_tau_2(alpha = curr_alpha, 
+                           beta = curr_beta,
+                           gamma = curr_gamma)
+  
+  data_alpha[i] <- curr_alpha
+  data_beta[i] <- curr_beta
+  data_gamma[i] <- curr_gamma
+  data_tau_2[i] <- curr_tau_2
+  }
+  
+  return(cbind(data_alpha, data_beta, data_gamma, data_tau_2))
+}
+
+allresult <- Metropolis_Gibbs(curr_alpha, curr_beta, curr_gamma, curr_tau_2, num_sim)
+
+# burn-in procedure (burn-in = 1000)
+alpha <- allresult[,1][-(1:1000)]
+beta <- allresult[,2][-(1:1000)]
+gamma <- allresult[,3][-(1:1000)]
+tau_2 <- allresult[,4][-(1:1000)]
+
+alpha_beta <- cbind(alpha = alpha, beta = beta)
+gamma_tau <- cbind(gamma = gamma, tau2 = tau_2)
+
+summary(as.mcmc(allresult))
+```
+
+#### This is the plot of non-linear regression from MCMC
+```{r plot_nonlinear_regression}
+alpha.hat = mean(alpha)
+beta.hat = mean(beta)
+gamma.hat = mean(gamma)
+tau.hat = mean(tau_2)
+
+data <- alpha.hat - beta.hat*gamma.hat^x
+plot(x = x, y = Y, main="Non-Linear Regession", xlab = "Age", ylab = "Length")
+lines(x=x, y = data)
+```
+
+
+### 1g)  Show the 4 univariate trace-plots of the simulations of each parameter
+```{r g(trace-plots(alpha&beta))}
+plot(as.mcmc(alpha_beta))
+```
+```{r g(trace-plots(gamma&tau))}
+plot(as.mcmc(gamma_tau))
+```
+
+For $\alpha$ and $\gamma$, the traces are fluctuated while traces of $\beta$ and $\tau^2$ are relatively stable. This can be seen by the density distribution as well.
+
+### 1h)  Evaluate graphically the behaviour of the empirical averages $\hat{I}_t$  with growing $t=1,...,T$
+
+```{r h(empirical_average)}
+par(mfrow=c(2,2))
+plot(cumsum(alpha)/1:length(alpha), type="l", xaxt = "n",xlab = "Simulation Time T", 
+    ylab = expression(alpha), main = expression("Empirical Average of " * alpha))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+plot(cumsum(beta)/1:length(beta), type="l", xaxt = "n", xlab = "Simulation Time T", 
+     ylab = expression(beta), main = expression("Empirical Average of " * beta))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+plot(cumsum(gamma)/1:length(gamma), type="l", xaxt = "n",xlab = "Simulation Time T", 
+     ylab = expression(gamma), main = expression("Empirical Average of " * gamma))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+plot(cumsum(tau_2)/1:length(tau_2), type="l", xaxt = "n",xlab = "Simulation Time T", 
+     ylab = expression(tau^2), main = expression("Empirical Average of " * tau^2))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+```
+
+This plot is more understandable than previous plots(trace-plots).
+
+We can see that empirical averages for all of parameters are converging as the simulation times. Especially, after $T = 6000$, empirical values start being stable. 
+
+### 1i)  Provide estimates for each parameter together with the approximation error and explain how you have evaluated such error
+
+I use "batchmeans" package to get the MCMC standard error
+
+##### the MCMC standard error by "batchmeans" package
+```{r i(approximation_error)}
+err_alpha = bm(alpha)$se
+err_beta  = bm(beta)$se
+err_gamma = bm(gamma)$se
+err_tau_2 = bm(tau_2)$se
+
+c("alpha" = round(err_alpha, 5), "beta" = round(err_beta, 5),
+  "gamma" = round(err_gamma, 5), "tau_2" = round(err_tau_2, 5))
+```
+
+It is reasonable that approximation error for $\alpha$ is the largest number among them because $\alpha$ has the biggest value which is approximately between 2.6 and 2.7. Also, $\tau^2$ has the smallest number. We can see that this value depends on the value that parameter is distributed.
+
+##### the traditional standard error 
+```{r}
+err_alpha = sd(alpha)/sqrt(length(alpha))
+err_beta  = sd(beta)/sqrt(length(beta))
+err_gamma = sd(gamma)/sqrt(length(gamma))
+err_tau_2 = sd(tau_2)/sqrt(length(tau_2))
+
+c("alpha" = round(err_alpha, 5), "beta" = round(err_beta, 5),
+  "gamma" = round(err_gamma, 5), "tau_2" = round(err_tau_2, 5))
+```
+
+I get standard error traditionally. But likewise, $\alpha$ has the biggest error and $\tau^2$ has the smallest error.
+
+### 1l)  Which parameter has the largest posterior uncertainty? How did you measure it?
+
+Since we know that approximate error depends on the mean. I divide the error by the mean.
+
+```{r l(posterior_uncertainty)}
+pu_alpha = err_alpha/mean(alpha)
+pu_beta = err_beta/mean(beta)
+pu_gamma = err_gamma/mean(gamma)
+pu_tau_2 = err_tau_2/mean(tau_2)
+
+c("alpha" = round(pu_alpha, 5), "beta" = round(pu_beta, 5),
+  "gamma" = round(pu_gamma, 5), "tau_2" = round(pu_tau_2, 5)  )
+
+```
+
+After all, $\tau^2$, which has the smallest error, has the largest uncertainty. 
+
+
+### 1m)  Which couple of parameters has the largest correlation (in absolute value)?
+```{r m(correlation)}
+par(mfrow=c(1,1))
+corr = cor(data.frame(alpha, beta, gamma, tau_2))
+corrplot.mixed(corr)
+```
+
+According to the graph above, $\alpha$ and $\gamma$ are highly correlated. This takes long time to convergence of empirical average. Let us see the plots of empirical average again.
+
+```{r}
+par(mfrow=c(2,2))
+plot(cumsum(alpha)/1:length(alpha), type="l", xaxt = "n",xlab = "Simulation Time T", 
+    ylab = expression(alpha), main = expression("Empirical Average of " * alpha))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+abline(v = 5000)
+plot(cumsum(beta)/1:length(beta), type="l", xaxt = "n", xlab = "Simulation Time T", 
+     ylab = expression(beta), main = expression("Empirical Average of " * beta))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+abline(v = 2500)
+plot(cumsum(gamma)/1:length(gamma), type="l", xaxt = "n",xlab = "Simulation Time T", 
+     ylab = expression(gamma), main = expression("Empirical Average of " * gamma))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+abline(v = 5000)
+plot(cumsum(tau_2)/1:length(tau_2), type="l", xaxt = "n",xlab = "Simulation Time T", 
+     ylab = expression(tau^2), main = expression("Empirical Average of " * tau^2))
+axis(1, at=c(0,2000,4000,6000,8000), labels=c(1000,3000,5000,7000,9000))
+abline(v = 2500)
+```
+
+As we can see, empirical averages of $\beta$ and $\tau^2$ start converging from $T = 3500$. However, those of $\alpha$ and $\gamma$ start converging from $T = 6000$. 
+
+#### Highly correlated parameters take longer time to get convergence.
+
+### 1n)  Use the Markov chain to approximate the posterior predictive distribution of the length of a dugong with age of 20 years.
+
+At first, I made a function for MCMC of estimating the length.
+```{r n(function)}
+length_mcmc = function(x){
+  mu = alpha - beta * gamma^x
+  leng = rnorm(length(alpha), mu, tau_2)
+  return(leng)
+}
+```
+
+
+```{r n(20yo)}
+leng_20 = length_mcmc(20)
+summary(as.mcmc(leng_20))
+```
+
+
+### 1o)  Provide the prediction of a different dugong with age 30 
+```{r o(30yo)}
+leng_30 = length_mcmc(30)
+summary(as.mcmc(leng_30))
+```
+
+
+### 1p)  Which prediction is less precise?
+
+Look into the two values (error and uncertainty) that we discuss before.
+
+##### Error
+```{r p(error)}
+err_20 = bm(leng_20)$se
+err_30 = bm(leng_30)$se
+c("Age = 20" = round(err_20, 5), "Age = 30" = round(err_30, 5))
+```
+
+##### Uncertainty
+```{r p(uncertainty)}
+pu_20 = sqrt(var(leng_20))/mean(leng_20)
+pu_30 = sqrt(var(leng_30))/mean(leng_30)
+c("Age = 20" = round(pu_20, 5), "Age = 30" = round(pu_30, 5))
+```
+
+After all, both error and uncertainty of lenght where age is 30 are higher that those of age 20. Thus, the prediction for age 30 is less precise. This is because samples of high aged dugoungs are less than younger. There are many samples of young dugongs while there are only 3 samples that age of dogongs are older than 20. 
+
+Because of this, prediction of dugong where age is more than 20 is less precise than younger dugongs.
+
+
+***
+# Part 2
+
+### 2)  Let us consider a Markov chain $(X_t)_{t \geq 0}$ defined on the state space 
+### ${\cal S}=\{1,2,3\}$ with the following transition 
+
+<center>
+![](transition.png){width=250px}
+</center>
+
+
+```{r}
+set.seed(1234)
+S=c(1,2,3)
+#  transition probability matrix
+tpm <- matrix(c(0, 1/2, 1/2, 5/8, 1/8, 1/4, 2/3, 1/3, 0),nrow=3,byrow=T)
+```
+
+### 2a)  Starting at time $t=0$ in the state  $X_0=1$ simulate the Markov chain with distribution assigned as above for $t=1000$ consecutive times
+```{r}
+# Simulation of Markov Chain 
+NoRepeat <- function(nsample = 1000, x0){
+  chain <- rep(NA,nsample+1)
+  
+  # initial state
+  chain[1] <- x0   
+  
+  # start simulation
+  for(t in 1:nsample){
+    # record the present state
+    chain[t+1]<-sample(S,size=1,prob=tpm[chain[t],])
+  }
+  return(chain)
+}
+chain1 <- NoRepeat(1000, 1)
+```
+
+
+### 2b)  compute the empirical relative frequency of the two states in your simulation
+
+##### the proportion of empirical relative frequency for each state
+```{r}
+# the proportion of frequency for each state 
+prop.table(table(chain1))
+```
+This is the proportion of empirical frequency. We can see that state1 is the most frequent state. Next, we take a look in detail.
+
+##### Transition of all three states
+```{r}
+# function for the transition of frequency of one state
+get_freq <- function(chain, state){
+  freq <- rep(NA, length(chain))
+  count = 0
+  for (i in 1:length(chain)){
+    if (chain[i] == state){
+      count = count + 1
+    }
+    # calcurate the proportion of state
+    freq[i] <- count/i
+  }
+  return(freq)
+}
+```
+
+
+```{r}
+freq_1 <- get_freq(chain = chain1, state = 1)
+freq_2 <- get_freq(chain = chain1, state = 2)
+freq_3 <- get_freq(chain = chain1, state = 3)
+
+plot(freq_1, type="l", ylim = c(0,1), lwd = 1,
+     xlab = "Number of Transition", 
+     ylab = expression("Empirical Frequency of states"))
+lines(freq_2, type="l",  col = "red")
+lines(freq_3, type="l",  col = "blue")
+abline(v=100)
+legend(x="topright", legend=c("state 1", "state 2", "state 3"),
+       col=c("black","red", "blue"), lty=1:1, cex=1)
+```
+
+At first, until the number of transition is 100 (burn-in), the ratio of frequency for all states are fluctuated. As the transition goes by, the empirical frecuency for all states converge on th e stable values.
+
+State 1 is the most frequent state among all of states, and state 2 and state 3 are following respectively.
+
+
+### 2c)  repeat the simulation for 500 times and record only the final state at time $t=1000$ for each of the 500 simulated chains. Compute the relative frequency of the 500 final states. What distribution are you approximating in this way? Try to formalize the difference between this point and the previous point. 
+
+```{r}
+# Simulation of Markov Chain with repeating specific times
+Repeat <- function(nsample = 1000, num_sim = 500, x0){
+  record <- rep(NA, num_sim)
+  for(s in 1:num_sim){
+    chain <- rep(NA,nsample+1)
+    # initial state
+    chain[1] <- x0 
+    # start simulation
+    for(t in 1:nsample){
+      chain[t+1]<-sample(S,size=1,prob=tpm[chain[t],])
+    }
+    # record the last state
+    record[s] <- chain[nsample+1]
+  }
+  return(record)
+}
+record1 <- Repeat(1000, 500, 1)
+```
+
+```{r}
+# the proportion of frequency for each state
+prop.table(table(record1))
+```
+Same as the previous simulaiton, we can see that state 1 is the most frequent state.
+
+##### Now, take a look at the difference between this and previous one.
+### NOTICE: 
+### *X denotes previous simulation (without repeating 500 times), Y denotes this simulation (with repeating 500 times) from now*
+##### Empirical Frequency
+```{r}
+freq_NoRepeat <- as.vector(prop.table(table(chain1)))
+freq_Repeat <- as.vector(prop.table(table(record1)))
+diff <- matrix(
+        c(round(freq_NoRepeat[1],3),round(freq_NoRepeat[2],3),round(freq_NoRepeat[3],3),
+          round(freq_Repeat[1],3),round(freq_Repeat[2],3),round(freq_Repeat[3],3)),
+        nrow=2,byrow=T)
+colnames(diff) <- c("1","2","3")
+rownames(diff) <- c("X", "Y")
+diff
+```
+First, this is the empirical frequency of all states. As we can see, they have the similar values for all states. The order of frequecy is the same, such that state 1 is the most frequent state while state 3 is the least frequent one.
+
+##### Transition of all three states
+
+```{r}
+freq_1_x <- get_freq(chain = chain1, state = 1)
+freq_2_x <- get_freq(chain = chain1, state = 2)
+freq_3_x <- get_freq(chain = chain1, state = 3)
+freq_1_y <- get_freq(chain = record1, state = 1)
+freq_2_y <- get_freq(chain = record1, state = 2)
+freq_3_y <- get_freq(chain = record1, state = 3)
+```
+
+I remove the transition after 500 for X cases because there are only 500 values for Y cases.
+
+```{r}
+plot(freq_1_x[1:500], type="l", ylim = c(0,1), lwd = 1, lty = 1,
+     xlab = "Number of Transition", 
+     ylab = expression("Empirical Frequency of states"))
+lines(freq_2_x[1:500], type="l", lty = 1, col = "red")
+lines(freq_3_x[1:500], type="l", lty = 1, col = "blue")
+lines(freq_1_y, type="l", lty = 2)
+lines(freq_2_y, type="l", lty = 2, col = "red")
+lines(freq_3_y, type="l", lty = 2, col = "blue")
+legend(x="topright", 
+       legend=c("state 1 of X", "state 2 of X", "state 3 of X",
+                "state 1 of Y", "state 2 of Y", "state 3 of Y"),
+       col=c("black","red", "blue","black","red", "blue"), 
+       lty=c(1,1,1,2,2,2), cex=1)
+```
+
+We can see that all states converge to the close values although the empirical frequencies are changing dramatically during the beginning of transitions. These transitions are called burn-in. Next, we go look at burn-in.
+
+##### Considering burn-in 
+```{r}
+plot(freq_1_x[100:500], type="l", ylim = c(0,1), lwd = 1, lty = 1, xaxt = "n",
+     xlab = "Number of Transition", 
+     ylab = expression("Empirical Frequency of states"))
+lines(freq_2_x[100:500], type="l", lty = 1, col = "red")
+lines(freq_3_x[100:500], type="l", lty = 1, col = "blue")
+lines(freq_1_y[100:500], type="l", lty = 2)
+lines(freq_2_y[100:500], type="l", lty = 2, col = "red")
+lines(freq_3_y[100:500], type="l", lty = 2, col = "blue")
+axis(1, at=c(0,100,200,300,400), labels=c(100,200,300,400,500))
+legend(x="topright", 
+       legend=c("state 1 of X", "state 2 of X", "state 3 of X",
+                "state 1 of Y", "state 2 of Y", "state 3 of Y"),
+       col=c("black","red", "blue","black","red", "blue"), 
+       lty=c(1,1,1,2,2,2), cex=1)
+```
+
+After excluding burn-in, the frequecy for each state relatively stay on the same value.
+
+### 2d)  compute the theoretical stationary distribution $\pi$ and explain how you have obtained it
+
+$$\pmb {\pi} = \pmb {\pi} \pmb P$$
+$$\pmb {\pi} = \left[ \pi_1 \ \pi_2 \ \pi_3 \right] \left[\begin{array}
+{rrr}
+0 & 1/2 & 1/2 \\
+5/8 & 1/8 & 1/4 \\
+2/3 & 1/3 & 0
+\end{array}\right]
+=\left[ \pi_1 \ \pi_2 \ \pi_3 \right]$$
+
+
+Now, we get these.
+$$5/8\pi_2 + 2/3 \pi_3 = \pi_1$$
+$$1/2\pi_1 + 1/8\pi_2 + 1/3\pi_3 = \pi_2$$
+$$1/2\pi_1 + 1/4\pi_2 = \pi_3$$
+Also, considering that the sum of these values must be 1, I get these values below.
+
+```{r}
+A <- matrix(c(-1, 5/8, 2/3, 1/2, -7/8, 1/3, 1/2, 1/4, -1, 1, 1, 1), nrow = 4, byrow = T)
+b <- matrix(c(0, 0, 0, 1), 4, 1)
+# qr.solve(A,b)
+c("1" = qr.solve(A,b)[1], "2" = qr.solve(A,b)[2], "3" = qr.solve(A,b)[3])
+```
+Thus, the theoretical stationary distribution $\pmb {\pi}$ is following.
+
+$$\pmb {\pi} =\left[ \pi_1 \ \pi_2 \ \pi_3 \right]
+= \left[ 0.3917526 \quad  0.3298969 \quad 0.2783505 \right]$$
+
+
+### 2e)  is it well approximated by the simulated empirical relative frequencies computed in (b) and (c)?
+
+##### At first, I check the transitions for each case and see how much they are close to the theoretical stationary values. 
+
+```{r}
+plot(freq_1_x[1:500], type="l", ylim = c(0,1), lwd = 1, lty = 1,
+     xlab = "Number of Transition", 
+     ylab = expression("Empirical Frequency of states"))
+lines(freq_2_x[1:500], type="l", lty = 1, col = "red")
+lines(freq_3_x[1:500], type="l", lty = 1, col = "blue")
+lines(freq_1_y, type="l", lty = 2)
+lines(freq_2_y, type="l", lty = 2, col = "red")
+lines(freq_3_y, type="l", lty = 2, col = "blue")
+abline(h = qr.solve(A,b)[1], col = "orange")
+abline(h = qr.solve(A,b)[2], col = "orange")
+abline(h = qr.solve(A,b)[3], col = "orange")
+legend(x="topright", 
+       legend=c("state 1 of X", "state 2 of X", "state 3 of X",
+                "state 1 of Y", "state 2 of Y", "state 3 of Y"),
+       col=c("black","red", "blue","black","red", "blue"), 
+       lty=c(1,1,1,2,2,2), cex=1)
+```
+
+According to the plot above, it can be clearly seen that empirical relative frequency of b is likely to stay on the theoritical stationary value while converging.
+
+##### Probability distribution for each transition
+ 
+```{r}
+par(mfrow=c(1,3))
+curve(dnorm(x, mean = mean(freq_1_x[1:500]), sd = sd(freq_1_x[1:500])),
+      xlim = c(0.2, 0.6), ylim = c(0, 12),
+      xlab = "Frequency of state 1", ylab = "Probability Density" )
+curve(dnorm(x, mean = mean(freq_1_y), sd = sd(freq_1_y)), lty = 2, add = TRUE)
+abline(v = qr.solve(A,b)[1], col = "orange")
+
+curve(dnorm(x, mean = mean(freq_2_x[1:500]), sd = sd(freq_2_x[1:500])),
+      xlim = c(0.15, 0.55), ylim = c(0, 16),
+      xlab = "Frequency of state 2", ylab = "Probability Density" )
+curve(dnorm(x, mean = mean(freq_2_y), sd = sd(freq_2_y)), lty = 2, add = TRUE)
+abline(v = qr.solve(A,b)[2], col = "orange")
+
+curve(dnorm(x, mean = mean(freq_3_x[1:500]), sd = sd(freq_3_x[1:500])),
+      xlim = c(0.1, 0.45), ylim = c(0, 16),
+      xlab = "Frequency of state 3", ylab = "Probability Density" )
+curve(dnorm(x, mean = mean(freq_3_y), sd = sd(freq_3_y)), lty = 2, add = TRUE)
+abline(v = qr.solve(A,b)[3], col = "orange")
+```
+
+Now, I make plots for distribution of frequency for each state. I confirm that the mean of these distributions is close to the theoretical value. Also, that we can the variance of Y is slightly bigger than that of X.
+
+### 2f)  what happens if we start at $t=0$ from state $X_0=2$ instead of  $X_0=1$?
+
+```{r}
+chain2 <- NoRepeat(1000, 2)
+record2 <- Repeat(1000, 500, 2)
+```
+
+```{r}
+freq_1_x <- get_freq(chain = chain2, state = 1)
+freq_2_x <- get_freq(chain = chain2, state = 2)
+freq_3_x <- get_freq(chain = chain2, state = 3)
+freq_1_y <- get_freq(chain = record2, state = 1)
+freq_2_y <- get_freq(chain = record2, state = 2)
+freq_3_y <- get_freq(chain = record2, state = 3)
+
+plot(freq_1_x[1:500], type="l", ylim = c(0,1), lwd = 1, lty = 1,
+     xlab = "Number of Transition", 
+     ylab = expression("Empirical Frequency of states"))
+lines(freq_2_x[1:500], type="l", lty = 1, col = "red")
+lines(freq_3_x[1:500], type="l", lty = 1, col = "blue")
+lines(freq_1_y, type="l", lty = 2)
+lines(freq_2_y, type="l", lty = 2, col = "red")
+lines(freq_3_y, type="l", lty = 2, col = "blue")
+abline(h = qr.solve(A,b)[1], col = "orange")
+abline(h = qr.solve(A,b)[2], col = "orange")
+abline(h = qr.solve(A,b)[3], col = "orange")
+legend(x="topright", 
+       legend=c("state 1 of X", "state 2 of X", "state 3 of X",
+                "state 1 of Y", "state 2 of Y", "state 3 of Y"),
+       col=c("black","red", "blue","black","red", "blue"), 
+       lty=c(1,1,1,2,2,2), cex=1)
+```
+
+As we saw the previous case where the initial state is 1 ($X_0=2$), likewise, we found out that the frequency coverge to the stationary distribution too.
+
+#### As a result, regardless of the initial state, all states converge to the stationary distribution on discete time Markov Chain.
+
+
+
+
+
